@@ -1,0 +1,11 @@
+
+is_num := &z.(z (&a.a) (&a.true)) false;
+S := &a.(&f.&x.a f (f x));
+P := &a.a (&z.(is_num z) (S z) 0) true;
+add := &a.&b.a S b;
+mult := &a.&b.a (add b) 0;
+eq1 := &a.(a (&x.x true true) (&a.&b.false)) false true;
+fact_ := &fact_.&n.(eq1 n) 1 (mult n (fact_ fact_ (P n)));
+fact := fact_ fact_;
+
+fact 7

@@ -348,7 +348,7 @@ int main(int32 argc, char** argv) {
 			if(!(flags & 0b100)) {
 				while(reduce_assign(&tree_mem, &total_uids, &root)) {
 					if(flags & 1) {
-						printf("\n");
+						printf("==>\n");
 						print_tree_basic(root);
 					}
 					total_steps += 1;
@@ -364,7 +364,7 @@ int main(int32 argc, char** argv) {
 			if(!(flags & 0b1000)) {
 				while(reduce_step(&tree_mem, &total_uids, &root)) {
 					if(flags & 1) {
-						printf("\n");
+						printf("==>\n");
 						print_tree_basic(root);
 					}
 					total_steps += 1;

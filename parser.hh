@@ -386,7 +386,7 @@ static DECL_PARSER(parse_assign) {
 				if(!root) {free_node(node_list, term); return 0;}
 				AST* new_node = reserve_node(node_list);
 				AST* sub_node = reserve_node(node_list);
-				new_node->part = PART_APP;
+				new_node->part = PART_ASSIGN;
 				new_node->app.left = sub_node;
 				new_node->app.right = term;
 				sub_node->part = PART_FN;
@@ -477,6 +477,17 @@ void print_tree_basic_text(char** msg, AST* root, int32 parent_type) {
 		push_string(msg, SYM_APP);
 		print_tree_basic_text(msg, root->app.right, 3);
 		if(parent_type == 3) push_string(msg, ')');
+	} else if(root->part == PART_ASSIGN) {
+		// if(parent_type == 3) push_string(msg, '(');
+		print_tree_basic_text(msg, root->app.left->fn.arg, 2);
+		push_string(msg, ' ');
+		push_string(msg, SYM_ASSIGN);
+		push_string(msg, ' ');
+		print_tree_basic_text(msg, root->app.right, 2);
+		push_string(msg, ";\n");
+		print_tree_basic_text(msg, root->app.left->fn.body, 2);
+		// print_tree_basic_text(msg, root->app.right, 3);
+		// if(parent_type == 3) push_string(msg, ')');
 	} else ASSERT(0);
 }
 void print_tree_basic(AST* root) {

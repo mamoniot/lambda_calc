@@ -17,7 +17,7 @@ bool is_var_eq(ASTVar var0, ASTVar var1) {
 }
 
 void alpha_rename(AST* term, ASTVar var, int64 uid) {
-	if(term->part == PART_APP) {
+	if(term->part == PART_APP || term->part == PART_ASSIGN) {
 		alpha_rename(term->app.left, var, uid);
 		alpha_rename(term->app.right, var, uid);
 	} else if(term->part == PART_FN) {
@@ -33,7 +33,7 @@ void alpha_rename(AST* term, ASTVar var, int64 uid) {
 }
 
 bool is_var_free(ASTVar var, AST* term) {
-	if(term->part == PART_APP) {
+	if(term->part == PART_APP || term->part == PART_ASSIGN) {
 		return is_var_free(var, term->app.left) || is_var_free(var, term->app.right);
 	} else if(term->part == PART_FN) {
 		if(is_var_eq(term->fn.arg->var, var)) {
@@ -51,7 +51,7 @@ bool is_var_free(ASTVar var, AST* term) {
 AST* copy_tree(NodeList* node_list, AST* root) {
 	AST* new_root = reserve_node(node_list);
 	memcopy(new_root, root, 1);
-	if(root->part == PART_APP || root->part == PART_FN) {
+	if(root->part == PART_APP || root->part == PART_ASSIGN || root->part == PART_FN) {
 		new_root->children[0] = copy_tree(node_list, root->children[0]);
 		new_root->children[1] = copy_tree(node_list, root->children[1]);
 	}
@@ -60,7 +60,7 @@ AST* copy_tree(NodeList* node_list, AST* root) {
 
 bool subst(NodeList* node_list, int64* next_uid, AST** root_ptr, ASTVar var, AST* term, bool do_copy) {
 	AST* root = *root_ptr;
-	if(root->part == PART_APP) {
+	if(root->part == PART_APP || root->part == PART_ASSIGN) {
 		do_copy = subst(node_list, next_uid, &root->app.left, var, term, do_copy);
 		return subst(node_list, next_uid, &root->app.right, var, term, do_copy);
 	} else if(root->part == PART_FN) {
@@ -158,7 +158,7 @@ AST* create_num(NodeList* node_list, int32 num) {
 
 void subst_num_(int32** ignore_nums, NodeList* node_list, AST** root_ptr) {
 	AST* root = *root_ptr;
-	if(root->part == PART_APP) {
+	if(root->part == PART_APP || root->part == PART_ASSIGN) {
 		subst_num_(ignore_nums, node_list, &root->app.left);
 		subst_num_(ignore_nums, node_list, &root->app.right);
 	} else if(root->part == PART_FN) {
@@ -191,7 +191,7 @@ void subst_num(NodeList* node_list, AST** root_ptr) {
 
 void subst_to_num(NodeList* node_list, AST** root_ptr) {
 	AST* root = *root_ptr;
-	if(root->part == PART_APP) {
+	if(root->part == PART_APP || root->part == PART_ASSIGN) {
 		subst_to_num(node_list, &root->app.left);
 		subst_to_num(node_list, &root->app.right);
 	} else if(root->part == PART_FN) {
@@ -203,7 +203,7 @@ void subst_to_num(NodeList* node_list, AST** root_ptr) {
 		AST* body = bot_fn->fn.body;
 		int32 n = 0;
 		while(1) {
-			if(body->part == PART_APP) {
+			if(body->part == PART_APP || body->part == PART_ASSIGN) {
 				AST* left = body->app.left;
 				if(left->part != PART_VAR || !is_var_eq(left->var, top_arg)) return;
 				body = body->app.right;
@@ -229,11 +229,11 @@ void subst_to_num(NodeList* node_list, AST** root_ptr) {
 
 bool reduce_step(NodeList* node_list, int64* next_uid, AST** root_ptr) {
 	AST* root = *root_ptr;
-	if(root->part == PART_APP) {
+	if(root->part == PART_APP || root->part == PART_ASSIGN) {
 		AST* left = root->app.left;
 		AST* right = root->app.right;
 		bool has_reduced = 0;
-		if(left->part == PART_APP) {
+		if(left->part == PART_APP || left->part == PART_ASSIGN) {
 			has_reduced = reduce_step(node_list, next_uid, &root->app.left);
 		} else if(left->part == PART_FN) {
 			subst(node_list, next_uid, &left->fn.body, left->fn.arg->var, right, 0);
@@ -247,12 +247,64 @@ bool reduce_step(NodeList* node_list, int64* next_uid, AST** root_ptr) {
 	return 0;
 }
 
+bool reduce_assign(NodeList* node_list, int64* next_uid, AST** root_ptr) {
+	AST* root = *root_ptr;
+	if(root->part == PART_APP) {
+		return reduce_assign(node_list, next_uid, &root->app.left) || reduce_assign(node_list, next_uid, &root->app.right);
+	} else if(root->part == PART_ASSIGN) {
+		AST* left = root->app.left;
+		AST* right = root->app.right;
+		bool has_reduced = 0;
+		if(left->part == PART_APP || left->part == PART_ASSIGN) {
+			has_reduced = reduce_assign(node_list, next_uid, &root->app.left);
+		} else if(left->part == PART_FN) {
+			subst(node_list, next_uid, &left->fn.body, left->fn.arg->var, right, 0);
+			*root_ptr = left->fn.body;
+			has_reduced = 1;
+		}
+		return has_reduced || reduce_assign(node_list, next_uid, &root->app.right);
+	} else if(root->part == PART_FN) {
+		return reduce_assign(node_list, next_uid, &root->fn.body);
+	}
+	return 0;
+}
+
+void parse_argv(char** argv, int32 argc, char** flags, int32 flags_size, uint32* ret_flags, char** ret_non_flags, int32 non_flags_size) {
+	*ret_flags = 0;
+	int32 non_flags_i = 0;
+	for_each_index(i, arg, &argv[1], argc - 1) {
+		bool is = 0;
+		for_each_index(j, flag, flags, flags_size) {
+			// printf("%s==%s\n", *arg, *flag);
+			if(strcmp(*arg, *flag) == 0) {
+				*ret_flags |= 1<<j;
+				is = 1;
+				break;
+			}
+		}
+		if(is) continue;
+		if(non_flags_i < non_flags_size) {
+			ret_non_flags[non_flags_i] = *arg;
+			non_flags_i += 1;
+		}
+	}
+	for_each_in_range(i, non_flags_i, non_flags_size - 1) {
+		ret_non_flags[i] = 0;
+	}
+}
 
 int main(int32 argc, char** argv) {
-	//TODO: multiple source files?
 	char* text = 0;
-	if(argc > 1) {
-		FILE* source_file = fopen(argv[1], "r");
+	char* possible_flags[5] = {"-p", "-nonum", "-noassign", "-noreduce", "-help"};
+	uint32 flags;
+	char* filename;
+	parse_argv(argv, argc, possible_flags, 5, &flags, &filename, 1);
+	if(flags & 0b10000) {
+		printf("available flags:\n-p : each reduce step is printed out\n-nonum : all numbers are printed as their functional representation\n-noassign : variable declarations are not assigned initially\n-noreduce : the given lambda calculus term is not reduced past assigning variable declarations");
+		return 0;
+	}
+	if(filename) {
+		FILE* source_file = fopen(filename, "r");
 		if(source_file) {
 			int ch = fgetc(source_file);
 			while(ch != EOF) {
@@ -269,7 +321,7 @@ int main(int32 argc, char** argv) {
 			}
 			fclose(source_file);
 		} else {
-			printf("Could not open file: %s.", argv[1]);
+			printf("Could not open file: %s.", filename);
 		}
 	} else {
 		while(1) {
@@ -291,21 +343,39 @@ int main(int32 argc, char** argv) {
 		NodeList tree_mem;
 		AST* root = parse_all(source, tokens, &error_msg, &tree_mem);
 		if(root) {
-			subst_num(&tree_mem, &root);
-			print_tree_basic(root);
 			int64 total_uids = FIRST_UID;
 			int64 total_steps = 0;
-			while(reduce_step(&tree_mem, &total_uids, &root)) {
-				// printf("=");
-				// print_tree_basic(root);
-				total_steps += 1;
+			if(!(flags & 0b100)) {
+				while(reduce_assign(&tree_mem, &total_uids, &root)) {
+					if(flags & 1) {
+						printf("\n");
+						print_tree_basic(root);
+					}
+					total_steps += 1;
+				}
 			}
-			printf("=");
-			print_tree_basic(root);
-			subst_to_num(&tree_mem, &root);
-			printf("=");
-			print_tree_basic(root);
-			printf("\nreduction took %lld steps\nused %lld uids", total_steps, total_uids);
+			if(flags & 0b10) {
+				subst_num(&tree_mem, &root);
+				print_tree_basic(root);
+			} else {
+				print_tree_basic(root);
+				subst_num(&tree_mem, &root);
+			}
+			if(!(flags & 0b1000)) {
+				while(reduce_step(&tree_mem, &total_uids, &root)) {
+					if(flags & 1) {
+						printf("\n");
+						print_tree_basic(root);
+					}
+					total_steps += 1;
+				}
+				printf("\n");
+				if(!(flags & 0b10)) {
+					subst_to_num(&tree_mem, &root);
+				}
+				print_tree_basic(root);
+				printf("\nreduction took %lld steps\nused %lld uids", total_steps, total_uids);
+			}
 		} else {
 			ASSERT(error_msg && error_msg[0]);
 			printf("%.*s", tape_size(&error_msg), error_msg);

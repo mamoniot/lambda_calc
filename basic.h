@@ -68,7 +68,7 @@ typedef uint64_t uint64;
 #define for_ever(name) for(int32 name = 0;; name += 1)
 
 #ifdef __cplusplus
- #define swap(v0, v1) auto UNIQUE_NAME(__t) = *(v0); *(v0) = *(v1); *(v1) = UNIQUE_NAME(__t)
+ #define memswap(v0, v1) auto UNIQUE_NAME(__t) = *(v0); *(v0) = *(v1); *(v1) = UNIQUE_NAME(__t)
 
  #define for_each_in(name, array, size) auto UNIQUE_NAME(name) = (array) + (size); for(auto name = (array); name != UNIQUE_NAME(name); name += 1)
  #define for_each_in_bw(name, array, size) auto UNIQUE_NAME(name) = (array) - 1; for(auto name = (array) + (size) - 1; name != UNIQUE_NAME(name); name -= 1)
@@ -77,7 +77,7 @@ typedef uint64_t uint64;
  #define for_each_index_bw(name, name_p, array, size) int32 UNIQUE_NAME(name) = (size); auto name_p = (array) + UNIQUE_NAME(name) - 1; for(int32 name = UNIQUE_NAME(name) - 1; name >= 0; (name -= 1, name_p -= 1))
 #endif
 
-#define tape_destroy(tape_ptr) (*(tape_ptr) ? free(__tape_base(tape_ptr)) : 0)
+#define tape_destroy(tape_ptr) (*(tape_ptr) ? (free(__tape_base(tape_ptr)), 0) : 0)
 #define tape_push(tape_ptr, v) (__tape_may_grow((tape_ptr), 1), (*(tape_ptr))[__tape_base(tape_ptr)[1]++] = (v))
 #define tape_append tape_push
 #define tape_pop(tape_ptr) ((*(tape_ptr))[--__tape_base(tape_ptr)[1]])

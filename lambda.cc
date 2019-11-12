@@ -369,7 +369,7 @@ int main(int32 argc, char** argv) {
 					}
 					total_steps += 1;
 				}
-				printf("\n");
+				printf("==>\n");
 				if(!(flags & 0b10)) {
 					subst_to_num(&tree_mem, &root);
 				}

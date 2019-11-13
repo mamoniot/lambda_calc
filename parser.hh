@@ -476,7 +476,8 @@ void push_var(char** msg, VarLexer* vars, Uid uid) {
 		tape_push(msg, '\'');
 	}
 }
-void push_term(char** msg, AST* root, VarLexer* vars, int32 parent_type = 0) {
+void push_term(char** msg, AST* root, AST* highlight, VarLexer* vars, int32 parent_type = 0) {
+	if(highlight == root) push_string(msg, "~~~");
 	if(root->part == PART_VAR) {
 		push_var(msg, vars, root->var_uid);
 	} else if(root->part == PART_FN) {
@@ -484,13 +485,13 @@ void push_term(char** msg, AST* root, VarLexer* vars, int32 parent_type = 0) {
 		push_string(msg, '&');
 		push_var(msg, vars, root->fn.arg_uid);
 		push_string(msg, '.');
-		push_term(msg, root->fn.body, vars, 0);
+		push_term(msg, root->fn.body, highlight, vars, 0);
 		if(parent_type != 0) push_string(msg, ')');
 	} else if(root->part == PART_APP) {
 		if(parent_type == 3) push_string(msg, '(');
-		push_term(msg, root->app.left, vars, 2);
+		push_term(msg, root->app.left, highlight, vars, 2);
 		push_string(msg, SYM_APP);
-		push_term(msg, root->app.right, vars, 3);
+		push_term(msg, root->app.right, highlight, vars, 3);
 		if(parent_type == 3) push_string(msg, ')');
 	} else if(root->part == PART_ASSIGN) {
 		// if(parent_type == 3) push_string(msg, '(');
@@ -498,16 +499,17 @@ void push_term(char** msg, AST* root, VarLexer* vars, int32 parent_type = 0) {
 		push_string(msg, ' ');
 		push_string(msg, SYM_ASSIGN);
 		push_string(msg, ' ');
-		push_term(msg, root->app.right, vars, 2);
+		push_term(msg, root->app.right, highlight, vars, 2);
 		push_string(msg, ";\n");
-		push_term(msg, root->app.left->fn.body, vars, 2);
+		push_term(msg, root->app.left->fn.body, highlight, vars, 2);
 		// push_term(msg, root->app.right, 3);
 		// if(parent_type == 3) push_string(msg, ')');
 	} else ASSERT(0);
+	if(highlight == root) push_string(msg, "~~~");
 }
-void print_term(AST* root, VarLexer* vars) {
+void print_term(AST* root, VarLexer* vars, AST* highlight = 0) {
 	char* msg = 0;
-	push_term(&msg, root, vars);
+	push_term(&msg, root, highlight, vars);
 	push_string(&msg, '\0');
 	printf("%s;\n", msg);
 	tape_destroy(&msg);

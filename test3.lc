@@ -8,4 +8,4 @@ eq1 := &a.(a (&x.x true true) (&a.&b.false)) false true;
 fact_ := &fact_.&n.(eq1 n) 1 (mult n (fact_ fact_ (P n)));
 fact := fact_ fact_;
 
-fact 6
+fact 7

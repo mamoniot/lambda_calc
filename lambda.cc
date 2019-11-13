@@ -3,7 +3,9 @@ Author: Monica Moniot
 Login:  mamoniot
 GitHub: mamoniot
 */
-
+#ifdef RELEASE
+ #define BASIC_NO_ASSERT
+#endif
 #include "basic.h"
 #define PARSER_IMPLEMENTATION
 #include "parser.hh"
@@ -51,7 +53,7 @@ AST* copy_tree(AST* root) {
 	return new_root;
 }
 
-bool subst(int64* next_uid, AST** root_ptr, Uid uid, AST* term, bool do_copy) {
+bool subst(Uid* next_uid, AST** root_ptr, Uid uid, AST* term, bool do_copy) {
 	AST* root = *root_ptr;
 	if(root->part == PART_APP || root->part == PART_ASSIGN) {
 		do_copy = subst(next_uid, &root->app.left, uid, term, do_copy);
@@ -158,77 +160,103 @@ void subst_to_num(AST** root_ptr) {
 		subst_to_num(&root->app.left);
 		subst_to_num(&root->app.right);
 	} else if(root->part == PART_FN) {
+		bool success = 1;
+		int32 num = 0;
 		Uid top_arg = root->fn.arg_uid;
 		AST* bot_fn = root->fn.body;
-		if(bot_fn->part != PART_FN) return;
-		Uid bot_arg = bot_fn->fn.arg_uid;
-		if(bot_arg == top_arg) return;
-		AST* body = bot_fn->fn.body;
-		int32 n = 0;
-		while(1) {
-			if(body->part == PART_APP || body->part == PART_ASSIGN) {
-				AST* left = body->app.left;
-				if(left->part != PART_VAR || left->var_uid != top_arg) return;
-				body = body->app.right;
-				n += 1;
-			} else if(body->part == PART_VAR) {
-				if(body->var_uid == bot_arg) {
-					break;
-				} else if(n == 0 && body->var_uid == top_arg) {
-					n = -1;
-					break;
-				} else return;
-			} else return;
+		if(bot_fn->part == PART_FN) {
+			Uid bot_arg = bot_fn->fn.arg_uid;
+			if(bot_arg == top_arg) success = 0;
+			AST* body = bot_fn->fn.body;
+			while(success) {
+				if(body->part == PART_APP || body->part == PART_ASSIGN) {
+					AST* left = body->app.left;
+					if(left->part != PART_VAR || left->var_uid != top_arg) {
+						success = 0;
+						break;
+					}
+					body = body->app.right;
+					num += 1;
+				} else if(body->part == PART_VAR) {
+					if(body->var_uid == bot_arg) {
+						break;
+					} else if(num == 0 && body->var_uid == top_arg) {
+						num = -1;
+						break;
+					} else success = 0;
+				} else success = 0;
+			}
+		} else success = 0;
+		if(success) {
+			AST* new_node = reserve_node();
+			new_node->part = PART_VAR;
+			new_node->var_uid = num|(~NUM_UID_MASK);
+			free_node(root);
+			*root_ptr = new_node;
+		} else {
+			subst_to_num(&root->fn.body);
 		}
-
-		AST* new_node = reserve_node();
-		new_node->part = PART_VAR;
-		new_node->var_uid = n|(~NUM_UID_MASK);
-		free_node(root);
-		*root_ptr = new_node;
 	}
 }
 
-bool reduce_step(int64* next_uid, AST** root_ptr) {
+AST** reduce_step(Uid* next_uid, AST** root_ptr) {
 	AST* root = *root_ptr;
 	if(root->part == PART_APP || root->part == PART_ASSIGN) {
 		AST* left = root->app.left;
 		AST* right = root->app.right;
-		bool has_reduced = 0;
 		if(left->part == PART_APP || left->part == PART_ASSIGN) {
-			has_reduced = reduce_step(next_uid, &root->app.left);
+			auto ret = reduce_step(next_uid, &root->app.left);
+			if(ret) return ret;
 		} else if(left->part == PART_FN) {
 			subst(next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
 			*root_ptr = left->fn.body;
-			has_reduced = 1;
+			return root_ptr;
 		}
-		return has_reduced || reduce_step(next_uid, &root->app.right);
+		return reduce_step(next_uid, &root->app.right);
 	} else if(root->part == PART_FN) {
 		return reduce_step(next_uid, &root->fn.body);
 	}
 	return 0;
 }
+// AST** reduce_step(Uid* next_uid, AST** top_ptr) {
+// 	AST*** stack = 0;
+// 	tape_push(&stack, top_ptr);
+// 	while(tape_size(&stack) > 0) {
+// 		AST** root_ptr = tape_pop(&stack);
+// 		AST* root = *root_ptr;
+// 		if(root->part == PART_APP || root->part == PART_ASSIGN) {
+// 			AST* left = root->app.left;
+// 			AST* right = root->app.right;
+// 			if(left->part == PART_APP || left->part == PART_ASSIGN) {
+// 				tape_push(&stack, &root->app.right);
+// 				tape_push(&stack, &root->app.left);
+// 			} else if(left->part == PART_FN) {
+// 				subst(next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
+// 				*root_ptr = left->fn.body;
+// 				tape_push(&stack, root_ptr);
+// 				// tape_destroy(&stack);
+// 				// return root_ptr;
+// 			} else if(left->part == PART_VAR) {
+// 				tape_push(&stack, &root->app.right);
+// 			}
+// 		} else if(root->part == PART_FN) {
+// 			tape_push(&stack, &root->fn.body);
+// 		} else if(root->part == PART_VAR) {
+// 		} else ASSERT(0);
+// 	}
+// 	return 0;
+// }
 
-bool reduce_assign(int64* next_uid, AST** root_ptr) {
+bool reduce_assign(Uid* next_uid, AST** root_ptr) {
 	AST* root = *root_ptr;
-	if(root->part == PART_APP) {
-		return reduce_assign(next_uid, &root->app.left) || reduce_assign(next_uid, &root->app.right);
-	} else if(root->part == PART_ASSIGN) {
+	if(root->part == PART_ASSIGN) {
 		AST* left = root->app.left;
 		AST* right = root->app.right;
-		bool has_reduced = 0;
-		if(left->part == PART_APP || left->part == PART_ASSIGN) {
-			has_reduced = reduce_assign(next_uid, &root->app.left);
-		} else if(left->part == PART_FN) {
-			subst(next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
-			*root_ptr = left->fn.body;
-			has_reduced = 1;
-		}
-		return has_reduced || reduce_assign(next_uid, &root->app.right);
-	} else if(root->part == PART_FN) {
-		return reduce_assign(next_uid, &root->fn.body);
-	}
-	return 0;
+		ASSERT(left->part == PART_FN);
+		subst(next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
+		*root_ptr = left->fn.body;
+		return 1;
+	} else return 0;
 }
 
 void parse_argv(char** argv, int32 argc, char** flags, int32 flags_size, uint32* ret_flags, char** ret_non_flags, int32 non_flags_size) {
@@ -257,14 +285,18 @@ void parse_argv(char** argv, int32 argc, char** flags, int32 flags_size, uint32*
 
 int main(int32 argc, char** argv) {
 	char* text = 0;
-	char* possible_flags[5] = {"-p", "-nonum", "-noassign", "-noreduce", "-help"};
+	char* possible_flags[5] = {"-p", "-nonum", "-a", "-noreduce", "-help"};
 	uint32 flags;
 	char* filename;
 	parse_argv(argv, argc, possible_flags, 5, &flags, &filename, 1);
 	if(flags & 0b10000) {
-		printf("available flags:\n-p : each reduce step is printed out\n-nonum : all numbers are printed as their functional representation\n-noassign : variable declarations are not assigned initially\n-noreduce : the given lambda calculus term is not reduced past assigning variable declarations");
+		printf("available flags:\n-p : each reduce step is printed out\n-nonum : all numbers are printed as their functional representation\n-a : variable declarations are assigned initially\n-noreduce : the given lambda calculus term is not reduced past assigning variable declarations");
 		return 0;
 	}
+	bool do_print  = (flags&0b1) > 0;
+	bool do_num    = (flags&0b10) == 0;
+	bool do_assign = (flags&0b100) > 0;
+	bool do_reduce = (flags&0b1000) == 0;
 	if(filename) {
 		FILE* source_file = fopen(filename, "r");
 		if(source_file) {
@@ -310,40 +342,61 @@ int main(int32 argc, char** argv) {
 			printf("%.*s", tape_size(&error_msg), error_msg);
 			return 0;
 		}
-		int64 total_uids = FIRST_UID;
+		bool skipped_first_arrow = 0;
+		Uid total_uids = FIRST_UID;
 		int64 total_steps = 0;
-		if(!(flags & 0b100)) {
-			while(reduce_assign(&total_uids, &root)) {
-				if(flags & 1) {
-					printf("==>\n");
-					print_term(root, &lexer);
-				}
-				total_steps += 1;
-			}
-		}
-		if(flags & 0b10) {
-			subst_num(&root);
-			print_term(root, &lexer);
-		} else {
-			print_term(root, &lexer);
-			subst_num(&root);
-		}
-		if(!(flags & 0b1000)) {
-			while(reduce_step(&total_uids, &root)) {
-				if(flags & 1) {
-					printf("==>\n");
-					print_term(root, &lexer);
-				}
-				total_steps += 1;
-			}
-			printf("==>\n");
-			if(!(flags & 0b10)) {
-				subst_to_num(&root);
-			}
-			print_term(root, &lexer);
-			printf("\nreduction took %lld steps\nused %lld uids", total_steps, total_uids);
-		}
 
+		if(!do_num) {
+			subst_num(&root);
+		}
+		if(do_assign) {
+			skipped_first_arrow = 1;
+			print_term(root, &lexer);
+		}
+		while(reduce_assign(&total_uids, &root)) {
+			if(do_assign) {
+				if(do_print) {
+					if(!skipped_first_arrow) {
+						skipped_first_arrow = 1;
+					} else printf("==>\n");
+					print_term(root, &lexer);
+				}
+				total_steps += 1;
+			}
+		}
+		if(!do_assign) {
+			skipped_first_arrow = 1;
+			print_term(root, &lexer);
+		}
+		if(do_reduce) {
+			if(do_num) {
+				subst_num(&root);
+				if(!do_assign & do_print) {
+					printf("==>\n");
+					print_term(root, &lexer);
+				}
+			}
+			AST** cur_root = 0;
+			while(1) {
+				AST** next_root = reduce_step(&total_uids, cur_root ? cur_root : &root);
+				if(!next_root && !cur_root) break;
+				cur_root = next_root;
+				if(next_root && do_print) {
+					printf("==>\n");
+					print_term(root, &lexer, *next_root);
+				}
+				total_steps += 1;
+			}
+			if(do_num) {
+				subst_to_num(&root);
+				printf("==>\n");
+				print_term(root, &lexer);
+			} else if(!do_print) {
+				printf("==>\n");
+				print_term(root, &lexer);
+			}
+		}
+		printf("\nreduction took %lld steps\n%lld variables were alpha renamed", total_steps, total_uids - FIRST_UID);
 	}
 	//NOTE: memory is not released before exit
 	return 0;

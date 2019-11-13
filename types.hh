@@ -46,31 +46,23 @@ enum Part : int32 {
 	PART_ASSIGN,
 };
 
-struct ASTVar {
-	union {
-		char* str;
-		int64 uid;
-	};
-	int32 size;
-};
 
 constexpr Uid NUM_F_UID = 0;
 constexpr Uid NUM_X_UID = 1;
 constexpr Uid FIRST_UID = 2;
-constexpr Uid NUM_UID_MASK = 1ll<<62;
-constexpr Uid VAR_UID_MASK = 1ll<<63;
+constexpr Uid NUM_UID_MASK = ~(1ll<<62);
+constexpr Uid VAR_UID_MASK = ~(1ll<<63);
 
 struct AST {
 	Part part;
 	union {
-		AST* children[2];
-		ASTVar var;
+		Uid var_uid;
 		struct {
 			AST* left;
 			AST* right;
 		} app;
 		struct {
-			AST* arg;
+			Uid arg_uid;
 			AST* body;
 		} fn;
 	};

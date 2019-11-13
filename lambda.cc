@@ -8,9 +8,6 @@ GitHub: mamoniot
 #define PARSER_IMPLEMENTATION
 #include "parser.hh"
 
-constexpr int64 NUM_F_UID = 0;
-constexpr int64 NUM_X_UID = 1;
-constexpr int64 FIRST_UID = 2;
 
 bool is_var_eq(ASTVar var0, ASTVar var1) {
 	return var0.size == var1.size && (var0.size > 0 ? (memcmp(var0.str, var1.str, var0.size) == 0) : (var0.uid == var1.uid));
@@ -294,6 +291,11 @@ void parse_argv(char** argv, int32 argc, char** flags, int32 flags_size, uint32*
 }
 
 int main(int32 argc, char** argv) {
+	int32 i = 1;
+	while(i != 0) {
+		i += 1;
+	}
+	return 0;
 	char* text = 0;
 	char* possible_flags[5] = {"-p", "-nonum", "-noassign", "-noreduce", "-help"};
 	uint32 flags;

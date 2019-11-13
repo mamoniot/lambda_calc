@@ -4,6 +4,10 @@
 #include "math.h"
 
 
+static int32 min(int32 a, int32 b) {return a < b ? a : b;}
+static int32 max(int32 a, int32 b) {return a > b ? a : b;}
+
+typedef int64 Uid;
 
 struct Source {
 	char* text;
@@ -50,6 +54,12 @@ struct ASTVar {
 	int32 size;
 };
 
+constexpr Uid NUM_F_UID = 0;
+constexpr Uid NUM_X_UID = 1;
+constexpr Uid FIRST_UID = 2;
+constexpr Uid NUM_UID_MASK = 1ll<<62;
+constexpr Uid VAR_UID_MASK = 1ll<<63;
+
 struct AST {
 	Part part;
 	union {
@@ -65,19 +75,8 @@ struct AST {
 		} fn;
 	};
 };
-// union ASTMem {
-// 	ASTMem* next;
-// 	AST node;
-// };
 
-// constexpr int32 NODE_BUFFER_SIZE = KILOBYTE;
-// struct NodeBuffer {
-// 	NodeBuffer* next;
-// 	int32 size;
-// 	ASTMem nodes[NODE_BUFFER_SIZE];
-// };
-struct NodeList {
-	int32 size;
-	// NodeBuffer* head;
-	// ASTMem* free_head;
+struct VarLexer {
+	char** strings;
+	int32* sizes;
 };

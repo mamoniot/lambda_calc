@@ -1,4 +1,4 @@
 
-pow := &a.&b.b a;
+S := &a.(&f.&x.a f (f x));
 
-pow 2 8
+S 2

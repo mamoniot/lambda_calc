@@ -33,16 +33,8 @@ void push_uint_and_pad(char** tape, uint32 n, int32 pad);
 
 
 
-#define DECL_PARSER(name) AST* name(Source source, Tokens tokens, int32* token_i, NodeList* node_list, char** error_msg)
-typedef DECL_PARSER(ParseFunc);
+TermPos parse_all(Source source, Tokens tokens, char** error_msg);
 
-AST* parse_all(Source source, Tokens tokens, char** error_msg);
-
-void print_tree_basic(AST* root);
-void print_tree(AST* root);
-
-AST* reserve_node(NodeList* node_list);
-// void destroy_tree(NodeList* node_list);
 void destroy_tokens(Tokens tokens);
 
 
@@ -54,8 +46,6 @@ inline void msg_unexpected(Source source, SourcePos pos, char* error_type, char*
 #ifdef PARSER_IMPLEMENTATION
 #undef PARSER_IMPLEMENTATION
 
-static int32 min(int32 a, int32 b) {return a < b ? a : b;}
-static int32 max(int32 a, int32 b) {return a > b ? a : b;}
 
 static bool is_whitespace(char ch) {return ch == ' ' | ch == '\t' | ch == '\n';}
 static bool is_var(char ch) {return ('a' <= ch & ch <= 'z') | ('A' <= ch & ch <= 'Z') | ('0' <= ch & ch <= '9') | ch == '_';}
@@ -131,6 +121,13 @@ Tokens tokenize(Source* source) {
 	return tokens;
 }
 
+void destroy_tokens(Tokens tokens) {
+	tape_destroy(&tokens.states);
+	tape_destroy(&tokens.strings);
+	tape_destroy(&tokens.sizes);
+	tape_destroy(&tokens.lines);
+	tape_destroy(&tokens.columns);
+}
 
 
 void push_string(char** tape, char* str, int32 size) {
@@ -249,44 +246,49 @@ static void msg_unexpected(Source source, Tokens tokens, int32 token_i, char* ex
 }
 
 
-AST* reserve_node(NodeList* node_list) {
-	node_list->size += 1;
-	// ASTMem* ret = node_list->free_head;
-	// if(ret) {
-	// 	node_list->free_head = &ret->next;
-	// 	memzero(ret, 1);
-	// } else {
-	// 	if(node_list->head->size >= NODE_BUFFER_SIZE) {
-	// 		NodeBuffer* buffer = talloc(NodeBuffer, 1);
-	// 		memzero(buffer, 1);
-	// 		buffer->next = node_list->head;
-	// 		node_list->head = buffer;
-	// 	}
-	// 	ret = &node_list->head->nodes[node_list->head->size];
-	// 	node_list->head->size += 1;
-	// }
-	// return ret.node;
-	return talloc(AST, 1);
+static int64 get_var_uid(VarSyntaxStack* var_stack, char* varstr, int32 varstr_size) {
+	if(strcmp(varstr, varstr_size, "true")) {
+		return -1|(~UID_NUM_MASK);
+	} else if(strcmp(varstr, varstr_size, "false")) {
+		return 0|(~UID_NUM_MASK);
+	}
+	bool success = 1;
+	int32 n = 0;
+	for_each_index(i, ch, varstr, varstr_size) {
+		if('0' <= *ch & *ch <= '9') {
+			n *= 10;
+			n += *ch - '0';
+		} else {
+			success = 0;
+			break;
+		}
+	}
+	if(success) return n|(~UID_NUM_MASK);
+
+	int64 uid = -1;
+	int32 stack_size = tape_size(&var_stack->strings);
+	for_each_index_bw(i, str, var_stack->strings, stack_size) {
+		if(strcmp(varstr, varstr_size, *str, var_stack->sizes[i])) {
+			uid = i;
+			break;
+		}
+	}
+	if(uid == -1) {
+		uid = stack_size;
+		tape_push(&var_stack->strings, varstr);
+		tape_push(&var_stack->sizes, varstr_size);
+	}
+	return uid|(~UID_VAR_MASK);
 }
-static AST* reserve_var(NodeList* node_list, char* str, int32 size) {
-	AST* var = reserve_node(node_list);
-	var->part = PART_VAR;
-	var->var.str = str;
-	var->var.size = size;
-	return var;
+static void get_var_from_uid(VarSyntaxStack* var_stack, int64 uid, char** ret_str, int32* ret_str_size) {
+	ASSERT(uid&(~UID_VAR_MASK));
+	*ret_str = var_stack->strings[uid&UID_VAR_MASK];
+	*ret_str_size = var_stack->sizes[uid&UID_VAR_MASK];
+}
+static void write_var(TermPos* pos, VarSyntaxStack* var_stack, char* varstr, int32 varstr_size) {
+	write_term(pos, PART_VAR, get_var_uid(var_stack, varstr, varstr_size));
 }
 
-void free_node(NodeList* node_list, AST* node) {
-	node_list->size -= 1;
-	// ASTMem* node = cast(ASTMem*, node_ptr);
-	// node->next = node_list->free_head;
-	// node_list->free_head = node;
-	if(node->part == PART_APP || node->part == PART_FN) {
-		free_node(node_list, node->children[0]);
-		free_node(node_list, node->children[1]);
-	}
-	free(node);
-}
 
 
 static bool eat_token(Tokens tokens, int32* token_i, TokenState state) {
@@ -312,23 +314,29 @@ static bool eat_token(Tokens tokens, int32* token_i, TokenState state, char* str
 
 
 
+#define DECL_PARSER(name) int64 name(TermPos* dest, Source source, Tokens tokens, int32* token_i, VarSyntaxStack* var_stack, char** error_msg)
+typedef DECL_PARSER(ParseFunc);
+
+
 static DECL_PARSER(parse_app);
 
 static DECL_PARSER(parse_term) {
 	int32 pre_token_i = *token_i;
 	if(eat_token(tokens, token_i, TOKEN_NAME)) {
-		return reserve_var(node_list, tokens.strings[pre_token_i], tokens.sizes[pre_token_i]);
+		write_var(dest, var_stack, tokens.strings[pre_token_i], tokens.sizes[pre_token_i]);
+		return 1;
 	} else if(eat_token(tokens, token_i, TOKEN_SINGLE_SYM, SYM_FN)) {
 		int32 arg_i = *token_i;
 		if(eat_token(tokens, token_i, TOKEN_NAME)) {
 			if(eat_token(tokens, token_i, TOKEN_SINGLE_SYM, SYM_ARG)) {
-				AST* body = parse_app(source, tokens, token_i, node_list, error_msg);
-				if(!body) return 0;
-				AST* node = reserve_node(node_list);
-				node->part = PART_FN;
-				node->fn.arg = reserve_var(node_list, tokens.strings[arg_i], tokens.sizes[arg_i]);
-				node->fn.body = body;
-				return node;
+				write_term(dest, PART_FN, get_var_uid(var_stack, tokens.strings[arg_i], tokens.sizes[arg_i]));
+				int64 body_size = parse_app(dest, source, tokens, token_i, var_stack, error_msg);
+				if(body_size) {
+					return body_size + 1;
+				} else {
+					pop_term(dest);
+					return 0;
+				}
 			} else {
 				msg_unexpected(source, tokens, *token_i, "\".\"", error_msg);
 				return 0;
@@ -338,12 +346,12 @@ static DECL_PARSER(parse_term) {
 			return 0;
 		}
 	} else if(eat_token(tokens, token_i, TOKEN_PAREN, SYM_OPEN_PAREN)) {
-		AST* node = parse_app(source, tokens, token_i, node_list, error_msg);
-		if(!node) return 0;
+		int64 paren_size = parse_app(dest, source, tokens, token_i, var_stack, error_msg);
+		if(!paren_size) return 0;
 		if(eat_token(tokens, token_i, TOKEN_PAREN, SYM_CLOSE_PAREN)) {
-			return node;
+			return paren_size;
 		} else {
-			free_node(node_list, node);
+			pop_term(dest, paren_size);
 			msg_unexpected(source, tokens, *token_i, "\")\"", error_msg);
 			return 0;
 		}
@@ -353,92 +361,88 @@ static DECL_PARSER(parse_term) {
 	}
 }
 
-static AST* parse_app_loop_(AST* left_node, Source source, Tokens tokens, int32* token_i, NodeList* node_list, char** error_msg) {
+static void parse_app_loop_(TermPos* app_dest, int64 left_size, TermPos* dest, Source source, Tokens tokens, int32* token_i, VarSyntaxStack* var_stack, char** error_msg) {
 	int32 pre_token_i = *token_i;
 	//non-deterministically check next token set
-	int32 pre_node_list_size = node_list->size;
-	AST* right_node = parse_term(source, tokens, token_i, node_list, 0);
-	if(right_node) {
-		AST* new_node = reserve_node(node_list);
-		new_node->part = PART_APP;
-		new_node->app.left = left_node;
-		new_node->app.right = right_node;
-		return parse_app_loop_(new_node, source, tokens, token_i, node_list, error_msg);
+	// TermPos pos = reserve_term(dest);
+	int64 right_size = parse_term(app_dest, source, tokens, token_i, var_stack, 0);
+	if(right_size) {
+		parse_app_loop_(app_dest, 1 + left_size + right_size, dest, source, tokens, token_i, var_stack, error_msg);
+		write_term(dest, PART_APP, left_size);
 	} else {
 		*token_i = pre_token_i;
-		return left_node;
 	}
 }
 static DECL_PARSER(parse_app) {
-	AST* node = parse_term(source, tokens, token_i, node_list, error_msg);
-	if(!node) return 0;
-	return parse_app_loop_(node, source, tokens, token_i, node_list, error_msg);
+	int64 pre_count = dest->count;
+	TermPos app_dest = create_term_list();
+	TermPos app_start = app_dest;
+
+	// TermPos pos = reserve_term(dest);
+	int64 left_size = parse_term(&app_dest, source, tokens, token_i, var_stack, error_msg);
+	if(!left_size) return 0;
+	parse_app_loop_(&app_dest, left_size, dest, source, tokens, token_i, var_stack, error_msg);
+	copy_term(dest, &app_start, app_dest.count);
+	return dest->count - pre_count;
 }
 static DECL_PARSER(parse_assign) {
-	//TODO: non-deternimistic name evaluation
 	int32 pre_token_i = *token_i;
 	if(eat_token(tokens, token_i, TOKEN_NAME)) {
 		if(eat_token(tokens, token_i, TOKEN_SYM, SYM_ASSIGN)) {
-			AST* term = parse_app(source, tokens, token_i, node_list, error_msg);
-			if(!term) return 0;
+			TermPos pos = reserve_term(dest);
+
+			write_term(dest, PART_FN, get_var_uid(var_stack, tokens.strings[pre_token_i], tokens.sizes[pre_token_i]));
+
+			TermPos assign_dest = create_term_list();
+			TermPos assign_start = assign_dest;
+			TermPos root_dest = create_term_list();
+			TermPos root_start = root_dest;
+
+			int64 assign_size = parse_app(&assign_dest, source, tokens, token_i, var_stack, error_msg);
+			if(!assign_size) {
+				destroy_term_list(assign_dest);
+				destroy_term_list(root_dest);
+				return 0;
+			}
 			if(eat_token(tokens, token_i, TOKEN_SINGLE_SYM, SYM_SEMI)) {
-				AST* root = parse_assign(source, tokens, token_i, node_list, error_msg);
-				if(!root) {free_node(node_list, term); return 0;}
-				AST* new_node = reserve_node(node_list);
-				AST* sub_node = reserve_node(node_list);
-				new_node->part = PART_ASSIGN;
-				new_node->app.left = sub_node;
-				new_node->app.right = term;
-				sub_node->part = PART_FN;
-				sub_node->fn.arg = reserve_var(node_list, tokens.strings[pre_token_i], tokens.sizes[pre_token_i]);
-				sub_node->fn.body = root;
-				return new_node;
+				int64 root_size = parse_assign(&root_dest, source, tokens, token_i, var_stack, error_msg);
+				if(root_size) {
+					copy_term(dest, &root_start, root_size);
+					copy_term(dest, &assign_start, assign_size);
+					write_term(pos, PART_ASSIGN, root_size + 1);
+					destroy_term_list(assign_dest);
+					destroy_term_list(root_dest);
+					return 2 + assign_size + root_size;
+				} else {
+					destroy_term_list(assign_dest);
+					destroy_term_list(root_dest);
+					return 0;
+				}
 			} else {
-				free_node(node_list, term);
-				msg_unexpected(source, tokens, *token_i, "literal or variable", error_msg);
+				destroy_term_list(assign_dest);
+				destroy_term_list(root_dest);
+				msg_unexpected(source, tokens, *token_i, "\";\"", error_msg);
 				return 0;
 			}
 		} else {
 			*token_i = pre_token_i;
 		}
 	}
-	return parse_app(source, tokens, token_i, node_list, error_msg);
+	return parse_app(dest, source, tokens, token_i, var_stack, error_msg);
 }
 
 
-AST* parse_all(Source source, Tokens tokens, char** error_msg, NodeList* tree_mem) {
+bool parse_all(TermPos* dest, Source source, Tokens tokens, VarSyntaxStack* vars, char** error_msg) {
 	int32 token_i = 0;
-	memzero(tree_mem, 1);
-	// tree_mem->head = talloc(NodeBuffer, 1);
-	// memzero(tree_mem->head, 1);
-	AST* root = parse_assign(source, tokens, &token_i, tree_mem, error_msg);
-	if(root) {
-		if(tokens.states[token_i] == TOKEN_EOF) {
-			return root;
-		} else {
-			msg_unexpected(source, tokens, token_i, "end of file", error_msg);
-			return 0;
-		}
+	memzero(vars, 1);
+	int64 size = parse_assign(dest, source, tokens, &token_i, vars, error_msg);
+	if(size && tokens.states[token_i] != TOKEN_EOF) {
+		pop_term(dest, size);
+		msg_unexpected(source, tokens, token_i, "end of file", error_msg);
+		return 0;
 	}
-	return root;
-	//NOTE: Nothing is freed!
-}
-
-
-// void destroy_tree(NodeList* tree_mem) {
-// 	NodeBuffer* head = tree_mem->head;
-// 	while(head) {
-// 		NodeBuffer* cur = head;
-// 		head = head->next;
-// 		free(cur);
-// 	}
-// }
-void destroy_tokens(Tokens tokens) {
-	tape_destroy(&tokens.states);
-	tape_destroy(&tokens.strings);
-	tape_destroy(&tokens.sizes);
-	tape_destroy(&tokens.lines);
-	tape_destroy(&tokens.columns);
+	ASSERT(size == dest->count);
+	return 1;
 }
 
 
@@ -450,230 +454,70 @@ int32 push_uint_alpha(char** tape, uint64 n) {
 	tape_push(tape, ch);
 	return d;
 }
-void print_tree_basic_text(char** msg, AST* root, int32 parent_type) {
-	if(root->part == PART_VAR) {
-		if(root->var.size > 0) {
-			push_string(msg, root->var.str, root->var.size);
-		} else if(root->var.size == -1) {
-			if(root->var.uid == -1) {
-				push_string(msg, "true");
-			} else {
-				push_uint(msg, root->var.uid);
-			}
+void push_var(char** msg, VarSyntaxStack* vars, int64 uid) {
+	if(uid&(~UID_NUM_MASK)) {
+		int32 num = uid&UID_NUM_MASK;
+		if(num >= 0) {
+			push_uint(msg, num);
 		} else {
-			push_uint_alpha(msg, root->var.uid);
-			tape_push(msg, '\'');
+			push_string(msg, "true");
 		}
-	} else if(root->part == PART_FN) {
-		if(parent_type != 1) push_string(msg, '(');
+	} else if(uid&(~UID_VAR_MASK)) {
+		char* str;
+		int32 size;
+		get_var_from_uid(vars, uid, &str, &size);
+		push_string(msg, str, size);
+	} else {
+		push_uint_alpha(msg, uid);
+		tape_push(msg, '\'');
+	}
+}
+void push_term(char** msg, TermPos* source, VarSyntaxStack* vars, int32 parent_type = 0) {
+	auto part = get_term_part(*source);
+	if(part == PART_VAR) {
+		auto uid = get_term_info(*source);
+		incr_term(source);
+		push_var(msg, vars, uid);
+	} else if(part == PART_FN) {
+		auto uid = get_term_info(*source);
+		incr_term(source);
+		if(parent_type != 0) push_string(msg, '(');
 		push_string(msg, '&');
-		print_tree_basic_text(msg, root->fn.arg, 1);
+		push_var(msg, vars, uid);
 		push_string(msg, '.');
-		print_tree_basic_text(msg, root->fn.body, 1);
-		if(parent_type != 1) push_string(msg, ')');
-	} else if(root->part == PART_APP) {
-		if(parent_type == 3) push_string(msg, '(');
-		print_tree_basic_text(msg, root->app.left, 2);
+		push_term(msg, source, vars, 0);
+		if(parent_type != 0) push_string(msg, ')');
+	} else if(part == PART_APP) {
+		incr_term(source);
+		if(parent_type == 1) push_string(msg, '(');
+		push_term(msg, source, vars, 2);
 		push_string(msg, SYM_APP);
-		print_tree_basic_text(msg, root->app.right, 3);
-		if(parent_type == 3) push_string(msg, ')');
-	} else if(root->part == PART_ASSIGN) {
-		// if(parent_type == 3) push_string(msg, '(');
-		print_tree_basic_text(msg, root->app.left->fn.arg, 2);
+		push_term(msg, source, vars, 1);
+		if(parent_type == 1) push_string(msg, ')');
+	} else if(part == PART_NULL) {
+		incr_term(source);
+		push_term(msg, source, vars, parent_type);
+	} else if(part == PART_ASSIGN) {//fix assign
+		auto uid = get_term_info(*source);
+		incr_term(source);
+		push_var(msg, vars, uid);
 		push_string(msg, ' ');
 		push_string(msg, SYM_ASSIGN);
 		push_string(msg, ' ');
-		print_tree_basic_text(msg, root->app.right, 2);
+		char* temp = 0;
+		push_term(&temp, source, vars, 0);
+		push_term(msg, source, vars, 0);
 		push_string(msg, ";\n");
-		print_tree_basic_text(msg, root->app.left->fn.body, 2);
-		// print_tree_basic_text(msg, root->app.right, 3);
-		// if(parent_type == 3) push_string(msg, ')');
+		memcopy(tape_reserve(msg, tape_size(temp)), temp, tape_size(temp));
+		tape_destroy(&temp);
 	} else ASSERT(0);
 }
-void print_tree_basic(AST* root) {
+void print_term(TermPos* source, VarSyntaxStack* vars) {
 	char* msg = 0;
-	print_tree_basic_text(&msg, root, 1);
+	push_term(&msg, source, vars);
 	push_string(&msg, '\0');
 	printf("%s;\n", msg);
 	tape_destroy(&msg);
-}
-static int32 print_tree_dim_(AST* root, int32** line_queue, int32* width_start, int32* width_end) {
-	int32 start;
-	int32 end;
-	int32 queue_i = tape_size(line_queue);
-	if(root->part == PART_VAR) {
-		ASSERT(root->var.size > 0);
-		int32 width = root->var.size;
-		start = -(width - 1)/2;
-		end = width/2;
-	} else {
-		int32 total_leafs;
-		int32 pad[3] = {};
-		AST** leafs = root->children;
-		if(root->part == PART_FN) {
-			total_leafs = 2;
-			pad[0] = 2;
-		} else if(root->part == PART_APP) {
-			total_leafs = 2;
-		} else ASSERT(0);
-		int32 height = 1;
-		int32 leaf_starts[4] = {};
-		int32 leaf_ends[4] = {};
-		tape_reserve(line_queue, total_leafs);
-		for_each_lt(i, total_leafs) {
-			height += print_tree_dim_(leafs[i], line_queue, &leaf_starts[i], &leaf_ends[i]);
-		}
-		if(total_leafs > 1) {
-			int32 leaf_column[4] = {};
-			leaf_column[0] = -(pad[0] + 1)/2;
-			int32 extra = 1;
-			for_each_lt(i, total_leafs - 1) {
-				extra += (i < total_leafs - 2);
-				leaf_column[i + 1] = leaf_column[i] + pad[i] + extra;
-				extra = (i < total_leafs - 2 ? 2 : 1);
-			}
-			int32 overlap[3];
-			for_each_lt(i, total_leafs - 1) {
-			//find amount tree would be intersecting itself
-				int32 line_pad = 2;
-				int32 edge_pad = 1;
-				int32 leftmost_start = leaf_starts[0] + leaf_column[0];
-				int32 left_end = leaf_ends[i] + leaf_column[i];
-				int32 right_start = leaf_starts[i + 1] + leaf_column[i + 1];
-				overlap[i] = max(left_end - leaf_column[i + 1] + line_pad, leftmost_start - right_start + edge_pad);
-			}
-			for_each_lt(i, total_leafs - 1) {
-				if(overlap[i] > 0) {//tree would be intersecting itself by this much
-					if(i == 0) {
-						int32 ld = (overlap[i] + 1)/2;
-						if(ld > 0) {
-							for_each_in_range(j, 0, i) leaf_column[j] -= ld;
-							overlap[i] -= ld;
-						}
-					}
-					for_each_in_range(j, i + 1, total_leafs - 1) leaf_column[j] += overlap[i];
-				}
-			}
-			for_each_lt(i, total_leafs) {
-				(*line_queue)[queue_i + i] = leaf_column[i];
-			}
-			*width_start = leaf_starts[0] + leaf_column[0];
-			*width_end = leaf_ends[total_leafs - 1] + leaf_column[total_leafs - 1];
-		} else {
-			(*line_queue)[queue_i] = 0;
-			*width_start = min(leaf_starts[0], -(pad[0] + 1)/2);
-			*width_end = max(leaf_ends[0], (pad[0] + 2)/2);
-		}
-		return height;
-	}
-	tape_reserve(line_queue, 2);
-	(*line_queue)[queue_i] = start;
-	(*line_queue)[queue_i + 1] = end;
-	ASSERT(((*line_queue)[queue_i] + (*line_queue)[queue_i + 1])/2 == 0);
-	*width_start = start;
-	*width_end = end;
-	return 1;
-}
-
-static void print_tree_(AST* root, int32* line, int32 column, char* text, int32 width, int32* line_queue, int32* queue_i) {
-	char* text_line = &text[(*line)*width];
-	*line += 1;
-
-	if(root->part == PART_VAR) {
-		int32 left = line_queue[*queue_i] + column;
-		*queue_i += 1;
-		int32 right = line_queue[*queue_i] + column;
-		*queue_i += 1;
-		ASSERT(right < width - 1);
-		ASSERT(left >= 0);
-		for_each_in(ch, root->var.str, root->var.size) {
-			text_line[left] = *ch;
-			left += 1;
-		}
-	} else {
-		int32 total_leafs = 0;
-		AST** leafs = root->children;
-		int32 columns[4] = {};
-		char* divider[3] = {};
-
-		if(root->part == PART_FN) {
-			total_leafs = 2;
-			divider[0] = SYM_FN;
-		} else if(root->part == PART_APP) {
-			total_leafs = 2;
-			divider[0] = SYM_APP;
-		} else ASSERT(0);
-		ASSERT(total_leafs > 0);
-		for_each_lt(i, total_leafs) {
-			columns[i] = line_queue[*queue_i] + column;
-			*queue_i += 1;
-			ASSERT(columns[i] < width - 1);
-			ASSERT(columns[i] >= 0);
-		}
-		for_each_in_range(i, columns[0] + 1, columns[total_leafs - 1] - 1) {
-			text_line[i] = '_';
-		}
-		// ASSERT((columns[0] + columns[1])/2 == column);
-		if(total_leafs == 1) {
-			int32 size = strlen(divider[0]);
-			int32 cur_pos = column - (size - 1)/2;
-			text_line[cur_pos - 1] = '<';
-			for_each_in(ch, divider[0], size) {
-				text_line[cur_pos] = *ch;
-				cur_pos += 1;
-			}
-			text_line[cur_pos] = '>';
-		} else {
-			for_each_lt(i, total_leafs - 1) {
-				int32 size = strlen(divider[i]);
-				int32 cur_pos = (columns[i] + columns[i + 1])/2 - (size - 1)/2;
-				if(i == 0) cur_pos = column - (size - 1)/2;
-				text_line[cur_pos - 1] = '/';
-				for_each_in(ch, divider[i], size) {
-					text_line[cur_pos] = *ch;
-					cur_pos += 1;
-				}
-				text_line[cur_pos] = '\\';
-			}
-		}
-
-		int32 pre_column = 0;
-		int32 pre_line = *line;
-		for_each_lt(i, total_leafs) {
-			int32 next_line = *line;
-			int32 cur_column = columns[i];
-			print_tree_(leafs[i], line, cur_column, text, width, line_queue, queue_i);
-			if(i > 0) {
-				for_each_in_range(j, pre_line, next_line - 1) {
-					text[j*width + cur_column] = '|';
-				}
-				if(i >= total_leafs - 1 && cur_column - pre_column > strlen(divider[i - 1]) + 2) {
-					text[pre_line*width + cur_column] = '\\';
-				}
-			}
-			pre_column = cur_column;
-		}
-	}
-}
-void print_tree(AST* root) {
-	int32 width_left;
-	int32 width_right;
-	int32* line_queue = 0;
-	int32 height = print_tree_dim_(root, &line_queue, &width_left, &width_right);
-	int32 width = width_right - width_left + 2;
-	char* text = talloc(char, width*height + 1);
-	memset(text, ' ', width*height);
-
-	for_each_lt(i, height) {
-		text[(i + 1)*width - 1] = '\n';
-	}
-	text[width*height] = 0;
-	int32 line = 0;
-	int32 queue_i = 0;
-	print_tree_(root, &line, -width_left, text, width, line_queue, &queue_i);
-
-	printf("%s", text);
-	free(text);
 }
 
 #endif

@@ -250,6 +250,9 @@ static void msg_unexpected(Source source, Tokens tokens, int32 token_i, char* ex
 }
 
 
+AST* reserve_node() {
+	return talloc(AST, 1);
+}
 static Uid get_var_uid(VarLexer* lexer, char* var, int32 var_size) {
 	if(strcmp(var, var_size, "true")) {
 		return -1|(~NUM_UID_MASK);

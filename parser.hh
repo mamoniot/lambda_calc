@@ -33,12 +33,6 @@ void push_uint_and_pad(char** tape, uint32 n, int32 pad);
 
 
 
-AST* parse_all(Source source, Tokens tokens, char** error_msg);
-
-void print_tree_basic(AST* root);
-void print_tree(AST* root);
-
-AST* reserve_node();
 void destroy_tokens(Tokens tokens);
 
 
@@ -250,9 +244,6 @@ static void msg_unexpected(Source source, Tokens tokens, int32 token_i, char* ex
 }
 
 
-AST* reserve_node() {
-	return talloc(AST, 1);
-}
 static Uid get_var_uid(VarLexer* lexer, char* var, int32 var_size) {
 	if(strcmp(var, var_size, "true")) {
 		return -1|(~NUM_UID_MASK);
@@ -292,23 +283,12 @@ static void get_var_from_uid(VarLexer* lexer, Uid uid, char** ret_str, int32* re
 	*ret_str = lexer->strings[uid&VAR_UID_MASK];
 	*ret_str_size = lexer->sizes[uid&VAR_UID_MASK];
 }
-static AST* reserve_var(VarLexer* lexer, char* str, int32 size) {
-	AST* var = reserve_node();
+static Ast* reserve_var(AstList* ast_list, VarLexer* lexer, char* str, int32 size) {
+	Ast* var = reserve_term(ast_list);
 	var->part = PART_VAR;
 	var->var_uid = get_var_uid(lexer, str, size);
 	return var;
 }
-
-void free_node(AST* node) {
-	if(node->part == PART_APP || node->part == PART_ASSIGN) {
-		free_node(node->app.left);
-		free_node(node->app.right);
-	} else if(node->part == PART_FN) {
-		free_node(node->fn.body);
-	}
-	free(node);
-}
-
 
 static bool eat_token(Tokens tokens, int32* token_i, TokenState state) {
 	TokenState cur_state = tokens.states[*token_i];
@@ -332,7 +312,7 @@ static bool eat_token(Tokens tokens, int32* token_i, TokenState state, char* str
 }
 
 
-#define DECL_PARSER(name) AST* name(Source source, Tokens tokens, int32* token_i, VarLexer* lexer, char** error_msg)
+#define DECL_PARSER(name) Ast* name(Source source, Tokens tokens, int32* token_i, AstList* ast_list, VarLexer* lexer, char** error_msg)
 typedef DECL_PARSER(ParseFunc);
 
 static DECL_PARSER(parse_app);
@@ -340,14 +320,14 @@ static DECL_PARSER(parse_app);
 static DECL_PARSER(parse_term) {
 	int32 pre_token_i = *token_i;
 	if(eat_token(tokens, token_i, TOKEN_NAME)) {
-		return reserve_var(lexer, tokens.strings[pre_token_i], tokens.sizes[pre_token_i]);
+		return reserve_var(ast_list, lexer, tokens.strings[pre_token_i], tokens.sizes[pre_token_i]);
 	} else if(eat_token(tokens, token_i, TOKEN_SINGLE_SYM, SYM_FN)) {
 		int32 arg_i = *token_i;
 		if(eat_token(tokens, token_i, TOKEN_NAME)) {
 			if(eat_token(tokens, token_i, TOKEN_SINGLE_SYM, SYM_ARG)) {
-				AST* body = parse_app(source, tokens, token_i, lexer, error_msg);
+				Ast* body = parse_app(source, tokens, token_i, ast_list, lexer, error_msg);
 				if(!body) return 0;
-				AST* node = reserve_node();
+				Ast* node = reserve_term(ast_list);
 				node->part = PART_FN;
 				node->fn.arg_uid = get_var_uid(lexer, tokens.strings[arg_i], tokens.sizes[arg_i]);
 				node->fn.body = body;
@@ -361,12 +341,12 @@ static DECL_PARSER(parse_term) {
 			return 0;
 		}
 	} else if(eat_token(tokens, token_i, TOKEN_PAREN, SYM_OPEN_PAREN)) {
-		AST* node = parse_app(source, tokens, token_i, lexer, error_msg);
+		Ast* node = parse_app(source, tokens, token_i, ast_list, lexer, error_msg);
 		if(!node) return 0;
 		if(eat_token(tokens, token_i, TOKEN_PAREN, SYM_CLOSE_PAREN)) {
 			return node;
 		} else {
-			free_node(node);
+			free_ast(ast_list, node);
 			msg_unexpected(source, tokens, *token_i, "\")\"", error_msg);
 			return 0;
 		}
@@ -376,17 +356,17 @@ static DECL_PARSER(parse_term) {
 	}
 }
 
-static AST* parse_app_loop_(AST* left_node, Source source, Tokens tokens, int32* token_i, VarLexer* lexer, char** error_msg) {
+static Ast* parse_app_loop_(Ast* left_node, Source source, Tokens tokens, int32* token_i, AstList* ast_list, VarLexer* lexer, char** error_msg) {
 	int32 pre_token_i = *token_i;
 	//non-deterministically check next token set
 	int32 pre_lexer_size = tape_size(&lexer->strings);
-	AST* right_node = parse_term(source, tokens, token_i, lexer, 0);
+	Ast* right_node = parse_term(source, tokens, token_i, ast_list, lexer, 0);
 	if(right_node) {
-		AST* new_node = reserve_node();
+		Ast* new_node = reserve_term(ast_list);
 		new_node->part = PART_APP;
 		new_node->app.left = left_node;
 		new_node->app.right = right_node;
-		return parse_app_loop_(new_node, source, tokens, token_i, lexer, error_msg);
+		return parse_app_loop_(new_node, source, tokens, token_i, ast_list, lexer, error_msg);
 	} else {
 		for_each_in_range(i, pre_lexer_size, tape_size(&lexer->strings) - 1) {
 			tape_pop(&lexer->strings);
@@ -397,22 +377,22 @@ static AST* parse_app_loop_(AST* left_node, Source source, Tokens tokens, int32*
 	}
 }
 static DECL_PARSER(parse_app) {
-	AST* node = parse_term(source, tokens, token_i, lexer, error_msg);
+	Ast* node = parse_term(source, tokens, token_i, ast_list, lexer, error_msg);
 	if(!node) return 0;
-	return parse_app_loop_(node, source, tokens, token_i, lexer, error_msg);
+	return parse_app_loop_(node, source, tokens, token_i, ast_list, lexer, error_msg);
 }
 static DECL_PARSER(parse_assign) {
 	//TODO: non-deternimistic name evaluation
 	int32 pre_token_i = *token_i;
 	if(eat_token(tokens, token_i, TOKEN_NAME)) {
 		if(eat_token(tokens, token_i, TOKEN_SYM, SYM_ASSIGN)) {
-			AST* term = parse_app(source, tokens, token_i, lexer, error_msg);
+			Ast* term = parse_app(source, tokens, token_i, ast_list, lexer, error_msg);
 			if(!term) return 0;
 			if(eat_token(tokens, token_i, TOKEN_SINGLE_SYM, SYM_SEMI)) {
-				AST* root = parse_assign(source, tokens, token_i, lexer, error_msg);
-				if(!root) {free_node(term); return 0;}
-				AST* new_node = reserve_node();
-				AST* sub_node = reserve_node();
+				Ast* root = parse_assign(source, tokens, token_i, ast_list, lexer, error_msg);
+				if(!root) {free_ast(ast_list, term); return 0;}
+				Ast* new_node = reserve_term(ast_list);
+				Ast* sub_node = reserve_term(ast_list);
 				new_node->part = PART_ASSIGN;
 				new_node->app.left = sub_node;
 				new_node->app.right = term;
@@ -421,7 +401,7 @@ static DECL_PARSER(parse_assign) {
 				sub_node->fn.body = root;
 				return new_node;
 			} else {
-				free_node(term);
+				free_ast(ast_list, term);
 				msg_unexpected(source, tokens, *token_i, "literal or variable", error_msg);
 				return 0;
 			}
@@ -429,14 +409,15 @@ static DECL_PARSER(parse_assign) {
 			*token_i = pre_token_i;
 		}
 	}
-	return parse_app(source, tokens, token_i, lexer, error_msg);
+	return parse_app(source, tokens, token_i, ast_list, lexer, error_msg);
 }
 
 
-AST* parse_all(Source source, Tokens tokens, VarLexer* lexer, char** error_msg) {
+Ast* parse_all(Source source, Tokens tokens, AstList* ast_list, VarLexer* lexer, char** error_msg) {
 	int32 token_i = 0;
 	memzero(lexer, 1);
-	AST* root = parse_assign(source, tokens, &token_i, lexer, error_msg);
+	memzero(ast_list, 1);
+	Ast* root = parse_assign(source, tokens, &token_i, ast_list, lexer, error_msg);
 	if(root) {
 		if(tokens.states[token_i] == TOKEN_EOF) {
 			return root;
@@ -476,7 +457,7 @@ void push_var(char** msg, VarLexer* vars, Uid uid) {
 		tape_push(msg, '\'');
 	}
 }
-void push_term(char** msg, AST* root, AST* highlight, VarLexer* vars, int32 parent_type = 0) {
+void push_term(char** msg, Ast* root, Ast* highlight, VarLexer* vars, int32 parent_type = 0) {
 	if(highlight == root) push_string(msg, "~~~");
 	if(root->part == PART_VAR) {
 		push_var(msg, vars, root->var_uid);
@@ -507,7 +488,7 @@ void push_term(char** msg, AST* root, AST* highlight, VarLexer* vars, int32 pare
 	} else ASSERT(0);
 	if(highlight == root) push_string(msg, "~~~");
 }
-void print_term(AST* root, VarLexer* vars, AST* highlight = 0) {
+void print_term(Ast* root, VarLexer* vars, Ast* highlight = 0) {
 	char* msg = 0;
 	push_term(&msg, root, highlight, vars);
 	push_string(&msg, '\0');

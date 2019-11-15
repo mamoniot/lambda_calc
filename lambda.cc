@@ -11,7 +11,7 @@ GitHub: mamoniot
 #include "parser.hh"
 
 
-void alpha_rename(AST* term, Uid pre_uid, Uid new_uid) {
+void alpha_rename(Ast* term, Uid pre_uid, Uid new_uid) {
 	if(term->part == PART_APP || term->part == PART_ASSIGN) {
 		alpha_rename(term->app.left, pre_uid, new_uid);
 		alpha_rename(term->app.right, pre_uid, new_uid);
@@ -26,7 +26,7 @@ void alpha_rename(AST* term, Uid pre_uid, Uid new_uid) {
 	}
 }
 
-bool is_var_free(AST* term, Uid uid) {
+bool is_var_free(Ast* term, Uid uid) {
 	if(term->part == PART_APP || term->part == PART_ASSIGN) {
 		return is_var_free(term->app.left, uid) || is_var_free(term->app.right, uid);
 	} else if(term->part == PART_FN) {
@@ -41,23 +41,23 @@ bool is_var_free(AST* term, Uid uid) {
 	return 0;
 }
 
-AST* copy_tree(AST* root) {
-	AST* new_root = reserve_node();
+Ast* copy_tree(AstList* ast_list, Ast* root) {
+	Ast* new_root = reserve_term(ast_list);
 	memcopy(new_root, root, 1);
 	if(root->part == PART_APP || root->part == PART_ASSIGN) {
-		new_root->app.left = copy_tree(root->app.left);
-		new_root->app.right = copy_tree(root->app.right);
+		new_root->app.left = copy_tree(ast_list, root->app.left);
+		new_root->app.right = copy_tree(ast_list, root->app.right);
 	} else if(root->part == PART_FN) {
-		new_root->fn.body = copy_tree(root->fn.body);
+		new_root->fn.body = copy_tree(ast_list, root->fn.body);
 	}
 	return new_root;
 }
 
-bool subst(Uid* next_uid, AST** root_ptr, Uid uid, AST* term, bool do_copy) {
-	AST* root = *root_ptr;
+bool subst(AstList* ast_list, Uid* next_uid, Ast** root_ptr, Uid uid, Ast* term, bool do_copy) {
+	Ast* root = *root_ptr;
 	if(root->part == PART_APP || root->part == PART_ASSIGN) {
-		do_copy = subst(next_uid, &root->app.left, uid, term, do_copy);
-		return subst(next_uid, &root->app.right, uid, term, do_copy);
+		do_copy = subst(ast_list, next_uid, &root->app.left, uid, term, do_copy);
+		return subst(ast_list, next_uid, &root->app.right, uid, term, do_copy);
 	} else if(root->part == PART_FN) {
 		if(root->fn.arg_uid != uid) {
 			if(is_var_free(term, root->fn.arg_uid)) {
@@ -65,13 +65,13 @@ bool subst(Uid* next_uid, AST** root_ptr, Uid uid, AST* term, bool do_copy) {
 				root->fn.arg_uid = *next_uid;
 				*next_uid += 1;
 			}
-			return subst(next_uid, &root->fn.body, uid, term, do_copy);
+			return subst(ast_list, next_uid, &root->fn.body, uid, term, do_copy);
 		}
 	} else if(root->part == PART_VAR) {
 		if(root->var_uid == uid) {
-			free_node(root);
+			free_single_term(ast_list, root);
 			if(do_copy) {
-				*root_ptr = copy_tree(term);
+				*root_ptr = copy_tree(ast_list, term);
 			} else {
 				*root_ptr = term;
 			}
@@ -91,21 +91,21 @@ bool get_num(Uid uid, int32* num) {
 	}
 }
 
-AST* create_num(int32 num) {
-	AST* top_fn = reserve_node();
+Ast* create_num(AstList* ast_list, int32 num) {
+	Ast* top_fn = reserve_term(ast_list);
 	top_fn->part = PART_FN;
 	top_fn->fn.arg_uid = NUM_F_UID;
-	AST* bot_fn = reserve_node();
+	Ast* bot_fn = reserve_term(ast_list);
 	bot_fn->part = PART_FN;
 	bot_fn->fn.arg_uid = NUM_X_UID;
-	AST* body = reserve_node();
+	Ast* body = reserve_term(ast_list);
 	top_fn->fn.body = bot_fn;
 	bot_fn->fn.body = body;
 
 	for_each_lt(i, num) {
-		AST* f_var = reserve_node();
+		Ast* f_var = reserve_term(ast_list);
 		f_var->part = PART_VAR;
-		AST* new_body = reserve_node();
+		Ast* new_body = reserve_term(ast_list);
 		body->part = PART_APP;
 		f_var->var_uid = NUM_F_UID;
 		body->app.left = f_var;
@@ -121,19 +121,19 @@ AST* create_num(int32 num) {
 	return top_fn;
 }
 
-void subst_num_(int32** ignore_nums, AST** root_ptr) {
-	AST* root = *root_ptr;
+void subst_num_(AstList* ast_list, int32** ignore_nums, Ast** root_ptr) {
+	Ast* root = *root_ptr;
 	if(root->part == PART_APP || root->part == PART_ASSIGN) {
-		subst_num_(ignore_nums, &root->app.left);
-		subst_num_(ignore_nums, &root->app.right);
+		subst_num_(ast_list, ignore_nums, &root->app.left);
+		subst_num_(ast_list, ignore_nums, &root->app.right);
 	} else if(root->part == PART_FN) {
 		int32 n;
 		if(get_num(root->fn.arg_uid, &n)) {
 			tape_push(ignore_nums, n);
-			subst_num_(ignore_nums, &root->fn.body);
+			subst_num_(ast_list, ignore_nums, &root->fn.body);
 			tape_pop(ignore_nums);
 		} else {
-			subst_num_(ignore_nums, &root->fn.body);
+			subst_num_(ast_list, ignore_nums, &root->fn.body);
 		}
 	} else if(root->part == PART_VAR) {
 		int32 num;
@@ -141,36 +141,36 @@ void subst_num_(int32** ignore_nums, AST** root_ptr) {
 			for_each_in(n, *ignore_nums, tape_size(ignore_nums)) {
 				if(*n == num) return;
 			}
-			free_node(root);
-			*root_ptr = create_num(num);
+			free_single_term(ast_list, root);
+			*root_ptr = create_num(ast_list, num);
 		}
 	}
 }
 
-void subst_num(AST** root_ptr) {
+void subst_num(AstList* ast_list, Ast** root_ptr) {
 	int32* ignore_nums = 0;
-	subst_num_(&ignore_nums, root_ptr);
+	subst_num_(ast_list, &ignore_nums, root_ptr);
 	tape_destroy(&ignore_nums);
 }
 
 
-void subst_to_num(AST** root_ptr) {
-	AST* root = *root_ptr;
+void subst_to_num(AstList* ast_list, Ast** root_ptr) {
+	Ast* root = *root_ptr;
 	if(root->part == PART_APP || root->part == PART_ASSIGN) {
-		subst_to_num(&root->app.left);
-		subst_to_num(&root->app.right);
+		subst_to_num(ast_list, &root->app.left);
+		subst_to_num(ast_list, &root->app.right);
 	} else if(root->part == PART_FN) {
 		bool success = 1;
 		int32 num = 0;
 		Uid top_arg = root->fn.arg_uid;
-		AST* bot_fn = root->fn.body;
+		Ast* bot_fn = root->fn.body;
 		if(bot_fn->part == PART_FN) {
 			Uid bot_arg = bot_fn->fn.arg_uid;
 			if(bot_arg == top_arg) success = 0;
-			AST* body = bot_fn->fn.body;
+			Ast* body = bot_fn->fn.body;
 			while(success) {
 				if(body->part == PART_APP || body->part == PART_ASSIGN) {
-					AST* left = body->app.left;
+					Ast* left = body->app.left;
 					if(left->part != PART_VAR || left->var_uid != top_arg) {
 						success = 0;
 						break;
@@ -188,50 +188,54 @@ void subst_to_num(AST** root_ptr) {
 			}
 		} else success = 0;
 		if(success) {
-			AST* new_node = reserve_node();
+			Ast* new_node = reserve_term(ast_list);
 			new_node->part = PART_VAR;
 			new_node->var_uid = num|(~NUM_UID_MASK);
-			free_node(root);
+			free_ast(ast_list, root);
 			*root_ptr = new_node;
 		} else {
-			subst_to_num(&root->fn.body);
+			subst_to_num(ast_list, &root->fn.body);
 		}
 	}
 }
 
-AST** reduce_step(Uid* next_uid, AST** root_ptr) {
-	AST* root = *root_ptr;
+Ast** reduce_step(AstList* ast_list, Uid* next_uid, Ast** root_ptr) {
+	Ast* root = *root_ptr;
 	if(root->part == PART_APP || root->part == PART_ASSIGN) {
-		AST* left = root->app.left;
-		AST* right = root->app.right;
+		Ast* left = root->app.left;
+		Ast* right = root->app.right;
 		if(left->part == PART_APP || left->part == PART_ASSIGN) {
-			auto ret = reduce_step(next_uid, &root->app.left);
+			auto ret = reduce_step(ast_list, next_uid, &root->app.left);
 			if(ret) return ret;
 		} else if(left->part == PART_FN) {
-			subst(next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
+			if(!subst(ast_list, next_uid, &left->fn.body, left->fn.arg_uid, right, 0)) {
+				free_single_term(ast_list, right);
+			}
 			*root_ptr = left->fn.body;
+			free_single_term(ast_list, root);
+			free_single_term(ast_list, left);
 			return root_ptr;
 		}
-		return reduce_step(next_uid, &root->app.right);
+		return reduce_step(ast_list, next_uid, &root->app.right);
 	} else if(root->part == PART_FN) {
-		return reduce_step(next_uid, &root->fn.body);
+		return reduce_step(ast_list, next_uid, &root->fn.body);
 	}
 	return 0;
 }
-// AST** reduce_step(Uid* next_uid, AST** top_ptr) {
-// 	AST*** stack = 0;
+// Ast** reduce_step(ast_list, Uid* next_uid, Ast** top_ptr) {
+// 	Ast*** stack = 0;
 // 	tape_push(&stack, top_ptr);
 // 	while(tape_size(&stack) > 0) {
-// 		AST** root_ptr = tape_pop(&stack);
-// 		AST* root = *root_ptr;
+// 		Ast** root_ptr = tape_pop(&stack);
+// 		Ast* root = *root_ptr;
 // 		if(root->part == PART_APP || root->part == PART_ASSIGN) {
-// 			AST* left = root->app.left;
-// 			AST* right = root->app.right;
+// 			Ast* left = root->app.left;
+// 			Ast* right = root->app.right;
 // 			if(left->part == PART_APP || left->part == PART_ASSIGN) {
 // 				tape_push(&stack, &root->app.right);
 // 				tape_push(&stack, &root->app.left);
 // 			} else if(left->part == PART_FN) {
-// 				subst(next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
+// 				subst(ast_list, next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
 // 				*root_ptr = left->fn.body;
 // 				tape_push(&stack, root_ptr);
 // 				// tape_destroy(&stack);
@@ -247,13 +251,13 @@ AST** reduce_step(Uid* next_uid, AST** root_ptr) {
 // 	return 0;
 // }
 
-bool reduce_assign(Uid* next_uid, AST** root_ptr) {
-	AST* root = *root_ptr;
+bool reduce_assign(AstList* ast_list, Uid* next_uid, Ast** root_ptr) {
+	Ast* root = *root_ptr;
 	if(root->part == PART_ASSIGN) {
-		AST* left = root->app.left;
-		AST* right = root->app.right;
+		Ast* left = root->app.left;
+		Ast* right = root->app.right;
 		ASSERT(left->part == PART_FN);
-		subst(next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
+		subst(ast_list, next_uid, &left->fn.body, left->fn.arg_uid, right, 0);
 		*root_ptr = left->fn.body;
 		return 1;
 	} else return 0;
@@ -334,8 +338,9 @@ int main(int32 argc, char** argv) {
 		source.size = tape_size(&text);
 		Tokens tokens = tokenize(&source);
 		char* error_msg = 0;
-		VarLexer lexer;
-		AST* root = parse_all(source, tokens, &lexer, &error_msg);
+		VarLexer lexer = {};
+		AstList ast_list = {};
+		Ast* root = parse_all(source, tokens, &ast_list, &lexer, &error_msg);
 		destroy_tokens(tokens);
 		if(!root) {
 			ASSERT(error_msg && error_msg[0]);
@@ -347,13 +352,13 @@ int main(int32 argc, char** argv) {
 		int64 total_steps = 0;
 
 		if(!do_num) {
-			subst_num(&root);
+			subst_num(&ast_list, &root);
 		}
 		if(do_assign) {
 			skipped_first_arrow = 1;
 			print_term(root, &lexer);
 		}
-		while(reduce_assign(&total_uids, &root)) {
+		while(reduce_assign(&ast_list, &total_uids, &root)) {
 			if(do_assign) {
 				if(do_print) {
 					if(!skipped_first_arrow) {
@@ -370,15 +375,15 @@ int main(int32 argc, char** argv) {
 		}
 		if(do_reduce) {
 			if(do_num) {
-				subst_num(&root);
+				subst_num(&ast_list, &root);
 				if(!do_assign & do_print) {
 					printf("==>\n");
 					print_term(root, &lexer);
 				}
 			}
-			AST** cur_root = 0;
+			Ast** cur_root = 0;
 			while(1) {
-				AST** next_root = reduce_step(&total_uids, cur_root ? cur_root : &root);
+				Ast** next_root = reduce_step(&ast_list, &total_uids, cur_root ? cur_root : &root);
 				if(!next_root && !cur_root) break;
 				cur_root = next_root;
 				if(next_root && do_print) {
@@ -388,7 +393,7 @@ int main(int32 argc, char** argv) {
 				total_steps += 1;
 			}
 			if(do_num) {
-				subst_to_num(&root);
+				subst_to_num(&ast_list, &root);
 				printf("==>\n");
 				print_term(root, &lexer);
 			} else if(!do_print) {

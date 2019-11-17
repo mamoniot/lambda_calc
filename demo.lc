@@ -1,0 +1,46 @@
+//By Monica Moniot
+
+//This is the abstract syntax for my version of lambda calculus:
+//<assign> ::= <name> := <term>; <assign>
+//<assign> ::= <term>
+//<term> ::= &<name>.<term>
+//<term> ::= <term> <term>
+//<term> ::= (<term>)
+//<term> ::= <name>
+//<name> ::= [a-z | A-Z | _ | 0-9]*
+
+//My lambda calculus engine automatically replaces the variables "true" and "false" with their functional definitions
+//All numbers are also automatically replaced
+
+
+//Here are the definitions of basic arithmetic using ASM nomenclature
+//If the function should return a negative number, it instead returns "true"
+//"true" is treated like a generic negative number
+
+gez := &z.(z (&a.a) (&a.true)) false;
+eqz := &a.(gez a) (a (&x.false) true) false;
+
+incr := &a.(&f.&x.a f (f x));
+decr := &a.(gez a) (a (&z.(gez z) (incr z) 0) true) true;
+add  := &a.&b.a incr b;
+sub  := &a.&b.b decr a;
+mult := &a.&b.a (add b) 0;
+pow  := &a.&b.b a;
+
+eq := &a.&b.eqz (sub a b);
+lt := &a.&b.(gez (sub a b)) false true;
+
+//The Y combinator
+Y := &f.(&x.f (x x)) (&x.f (x x));
+
+//Fibonacci template for use with the Y combinator
+fib_y := &f.&n.(lt n 3) 1 (add (f (decr n)) (f (sub n 2)));
+
+//Iterative fibonacci
+fib_it := &p.(&t.t (add (p false) (p true)) (p true));
+fib_init := &t.t 0 1;
+fib_fin := &p.p true;
+fib := &n.(fib_fin (n fib_it fib_init));
+
+//This is the main program; it takes advantage of the fact variables are irreducible to produce text in the output
+the 6th fibonacci number is (fib 6) and the y combinator tells us that it is ((Y fib_y) 6)

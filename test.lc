@@ -1,2 +1,16 @@
+//My lambda calculus engine is heavily optimized, this extreme computation should hopefully demonstrate that
+//On my computer, it can compute factorial of 7 in 20 seconds, doing +38 million reduction steps in that time
 
-2 2 2
+//definition of an optimized factorial function
+is_num := &z.(z (&a.a) (&a.true)) false;
+incr := &a.(&f.&x.a f (f x));
+decr := &a.a (&z.(is_num z) (incr z) 0) true;
+add := &a.&b.a incr b;
+mult := &a.&b.a (add b) 0;
+eq1 := &a.(a (&x.x true true) (&a.&b.false)) false true;
+fact_ := &fact_.&n.(eq1 n) 1 (mult n (fact_ fact_ (decr n)));
+fact := fact_ fact_;
+
+//Calculates factorial recursively, any number greater than 7 causes a stack overflow
+//I could fix this with a separate stack on the heap but I'm lazy
+fact 7

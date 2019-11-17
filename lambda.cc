@@ -3,7 +3,7 @@ Author: Monica Moniot
 Login:  mamoniot
 GitHub: mamoniot
 */
-#ifdef RELEASE
+#ifndef DEBUG
  #define BASIC_NO_ASSERT
 #endif
 #include "basic.h"
@@ -294,7 +294,7 @@ int main(int32 argc, char** argv) {
 	char* filename;
 	parse_argv(argv, argc, possible_flags, 5, &flags, &filename, 1);
 	if(flags & 0b10000) {
-		printf("available flags:\n-p : each reduce step is printed out\n-nonum : all numbers are printed as their functional representation\n-a : variable declarations are assigned initially\n-noreduce : the given lambda calculus term is not reduced past assigning variable declarations");
+		printf("command format: %s <filename>\navailable flags:\n-p : each reduction step is printed out\n-a : variable declarations are not assigned initially\n-nonum : all numbers are printed as their functional representation\n-noreduce : the given lambda calculus term is not reduced past assigning variable declarations\n", argv[0]);
 		return 0;
 	}
 	bool do_print  = (flags&0b1) > 0;
@@ -319,7 +319,7 @@ int main(int32 argc, char** argv) {
 			}
 			fclose(source_file);
 		} else {
-			printf("Could not open file: %s.", filename);
+			printf("Could not open file: %s.\n", filename);
 		}
 	} else {
 		while(1) {
@@ -363,7 +363,7 @@ int main(int32 argc, char** argv) {
 				if(do_print) {
 					if(!skipped_first_arrow) {
 						skipped_first_arrow = 1;
-					} else printf("==>\n");
+					} else printf("-->\n");
 					print_term(root, &lexer);
 				}
 				total_steps += 1;
@@ -377,7 +377,7 @@ int main(int32 argc, char** argv) {
 			if(do_num) {
 				subst_num(&ast_list, &root);
 				if(!do_assign & do_print) {
-					printf("==>\n");
+					printf("-->\n");
 					print_term(root, &lexer);
 				}
 			}
@@ -387,22 +387,24 @@ int main(int32 argc, char** argv) {
 				if(!next_root && !cur_root) break;
 				cur_root = next_root;
 				if(next_root && do_print) {
-					printf("==>\n");
+					printf("-->\n");
 					print_term(root, &lexer, *next_root);
 				}
 				total_steps += 1;
 			}
 			if(do_num) {
 				subst_to_num(&ast_list, &root);
-				printf("==>\n");
+				printf("-->\n");
 				print_term(root, &lexer);
 			} else if(!do_print) {
-				printf("==>\n");
+				printf("-->\n");
 				print_term(root, &lexer);
 			}
 		}
-		printf("\nreduction took %lld steps\n%lld variables were alpha renamed", total_steps, total_uids - FIRST_UID);
+		printf("\nreduction took %lld steps\n%lld variables were alpha renamed\n", total_steps, total_uids - FIRST_UID);
+	} else {
+		printf("No input given\n");
 	}
-	//NOTE: memory is not released before exit
+	//NOTE: lots of memory is not released before exit
 	return 0;
 }

@@ -24,30 +24,25 @@ static char* SYM_CLOSE_PAREN = ")";
 Tokens tokenize(char* str, int32 str_size);
 
 
-void push_string(char** tape, char* str, int32 size);
-void push_string(char** tape, char* str);
-void push_string(char** tape, char ch);
-
-int32 push_uint(char** tape, uint32 n);
-void push_uint_and_pad(char** tape, uint32 n, int32 pad);
-
-
-
 void destroy_tokens(Tokens tokens);
 
 
 void msg_unexpected(Source source, int32 line, int32 column, int32 size, char* error_type, char* unexpected, char* expected, char** error_msg);
-inline void msg_unexpected(Source source, SourcePos pos, char* error_type, char* unexpected, char* expected, char** error_msg) {msg_unexpected(source, pos.line, pos.column, pos.size, error_type, unexpected, expected, error_msg);}
+
+Ast* parse_all(Source source, Tokens tokens, AstList* ast_list, VarLexer* lexer, char** error_msg);
+
+void print_term(Ast* root, VarLexer* vars, Ast* highlight = 0);
+void push_term(char** msg, Ast* root, Ast* highlight, VarLexer* vars, int32 parent_type = 0);
 
 #endif
 
 #ifdef PARSER_IMPLEMENTATION
 #undef PARSER_IMPLEMENTATION
 
-static bool is_whitespace(char ch) {return ch == ' ' | ch == '\t' | ch == '\n';}
+static bool is_delimiter(char ch) {return ch == ' ' | ch == '\t' | ch == '\n';}
 static bool is_var(char ch) {return ('a' <= ch & ch <= 'z') | ('A' <= ch & ch <= 'Z') | ('0' <= ch & ch <= '9') | ch == '_';}
 static bool is_single_symbol(char ch) {return ch == '.' | ch == '&' | ch == ';';}
-static bool is_symbol(char ch) {return ch == '=' | ch == ':';}
+static bool is_symbol(char ch) {return ch == '=' | ch == ':' | ch == '/';}
 
 Tokens tokenize(Source* source) {
 	source->lines = 0;
@@ -73,8 +68,10 @@ Tokens tokenize(Source* source) {
 				state = TOKEN_SYM;
 			} else if(ch == '(' | ch == ')') {
 				state = TOKEN_PAREN;
+			} else if(!is_delimiter(ch)) {
+				state = TOKEN_UNKNOWN;
 			}
-			if(state != TOKEN_BASE) {
+			if(state != TOKEN_BASE & state != TOKEN_COMMENT) {
 				tape_push(&tokens.strings, &str[i]);
 				tape_push(&tokens.sizes, 1);
 				tape_push(&tokens.states, state);
@@ -92,10 +89,23 @@ Tokens tokenize(Source* source) {
 		} else if(state == TOKEN_SYM) {
 			int32 token_i = tape_size(&tokens.sizes) - 1;
 			if(is_symbol(ch)) {
-				tokens.sizes[token_i] += 1;
+				if(ch == '/') {
+					state = TOKEN_COMMENT;
+					tape_pop(&tokens.strings);
+					tape_pop(&tokens.sizes);
+					tape_pop(&tokens.states);
+					tape_pop(&tokens.lines);
+					tape_pop(&tokens.columns);
+				} else {
+					tokens.sizes[token_i] += 1;
+				}
 			} else {
 				state = TOKEN_BASE;
 				continue;
+			}
+		} else if(state == TOKEN_COMMENT) {
+			if(ch == '\n') {
+				state = TOKEN_BASE;
 			}
 		} else {
 			state = TOKEN_BASE;
@@ -128,24 +138,24 @@ void destroy_tokens(Tokens tokens) {
 }
 
 
-void push_string(char** tape, char* str, int32 size) {
+static void push_string(char** tape, char* str, int32 size) {
 	memcpy(tape_reserve(tape, size), str, size);
 }
-void push_string(char** tape, char* str) {
+static void push_string(char** tape, char* str) {
 	push_string(tape, str, strlen(str));
 }
-void push_string(char** tape, char ch) {
+static void push_string(char** tape, char ch) {
 	tape_push(tape, ch);
 }
 
-int32 push_uint(char** tape, uint32 n) {
+static int32 push_uint(char** tape, uint32 n) {
 	char ch = (n%10) + '0';
 	int32 d = 1;
 	if(n > 9) d += push_uint(tape, n/10);
 	tape_push(tape, ch);
 	return d;
 }
-void push_uint_and_pad(char** tape, uint32 n, int32 pad) {
+static void push_uint_and_pad(char** tape, uint32 n, int32 pad) {
 	pad -= push_uint(tape, n);
 	for_each_lt(i, pad) tape_push(tape, ' ');
 }
@@ -236,6 +246,8 @@ static void msg_unexpected(Source source, Tokens tokens, int32 token_i, char* ex
 		unexpected = "symbol";
 	} else if(state == TOKEN_PAREN) {
 		unexpected = "parathesis";
+	} else if(state == TOKEN_UNKNOWN) {
+		unexpected = "unused token";
 	} else {
 		// ASSERT(0);
 		unexpected = "token";
@@ -351,7 +363,7 @@ static DECL_PARSER(parse_term) {
 			return 0;
 		}
 	} else {
-		msg_unexpected(source, tokens, *token_i, "literal or variable", error_msg);
+		msg_unexpected(source, tokens, *token_i, "a term", error_msg);
 		return 0;
 	}
 }
@@ -402,7 +414,7 @@ static DECL_PARSER(parse_assign) {
 				return new_node;
 			} else {
 				free_ast(ast_list, term);
-				msg_unexpected(source, tokens, *token_i, "literal or variable", error_msg);
+				msg_unexpected(source, tokens, *token_i, ";", error_msg);
 				return 0;
 			}
 		} else {
@@ -431,7 +443,7 @@ Ast* parse_all(Source source, Tokens tokens, AstList* ast_list, VarLexer* lexer,
 
 
 
-int32 push_uint_alpha(char** tape, uint64 n) {
+static int32 push_uint_alpha(char** tape, uint64 n) {
 	constexpr int r = 'z' - 'a' + 1;
 	char ch = (n%r) + 'a';
 	int32 d = 1;
@@ -439,7 +451,7 @@ int32 push_uint_alpha(char** tape, uint64 n) {
 	tape_push(tape, ch);
 	return d;
 }
-void push_var(char** msg, VarLexer* vars, Uid uid) {
+static void push_var(char** msg, VarLexer* vars, Uid uid) {
 	if(uid&(~NUM_UID_MASK)) {
 		int32 num = uid&NUM_UID_MASK;
 		if(num >= 0) {
@@ -457,7 +469,7 @@ void push_var(char** msg, VarLexer* vars, Uid uid) {
 		tape_push(msg, '\'');
 	}
 }
-void push_term(char** msg, Ast* root, Ast* highlight, VarLexer* vars, int32 parent_type = 0) {
+void push_term(char** msg, Ast* root, Ast* highlight, VarLexer* vars, int32 parent_type) {
 	if(highlight == root) push_string(msg, "~~~");
 	if(root->part == PART_VAR) {
 		push_var(msg, vars, root->var_uid);
@@ -488,11 +500,11 @@ void push_term(char** msg, Ast* root, Ast* highlight, VarLexer* vars, int32 pare
 	} else ASSERT(0);
 	if(highlight == root) push_string(msg, "~~~");
 }
-void print_term(Ast* root, VarLexer* vars, Ast* highlight = 0) {
+void print_term(Ast* root, VarLexer* vars, Ast* highlight) {
 	char* msg = 0;
 	push_term(&msg, root, highlight, vars);
 	push_string(&msg, '\0');
-	printf("%s;\n", msg);
+	printf("%s\n", msg);
 	tape_destroy(&msg);
 }
 
